@@ -40,14 +40,11 @@ namespace Microsoft.Plugin.Program.Programs
         }
 
         private static readonly Lazy<bool> IsPackageDotInstallationPathAvailable = new Lazy<bool>(() =>
-            ApiInformation.IsPropertyPresent(typeof(Package).FullName, nameof(Package.InstalledPath)));
+            ApiInformation.IsPropertyPresent(typeof(Package).FullName, nameof(Package.InstalledLocation.Path)));
 
         public static PackageWrapper GetWrapperFromPackage(Package package)
         {
-            if (package == null)
-            {
-                throw new ArgumentNullException(nameof(package));
-            }
+            ArgumentNullException.ThrowIfNull(package);
 
             string path;
             try
@@ -77,6 +74,6 @@ namespace Microsoft.Plugin.Program.Programs
 
         // This is a separate method so the reference to .InstalledPath won't be loaded in API versions which do not support this API (e.g. older then Build 19041)
         private static string GetInstalledPath(Package package)
-            => package.InstalledPath;
+            => package.InstalledLocation.Path;
     }
 }

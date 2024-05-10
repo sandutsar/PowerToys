@@ -19,8 +19,6 @@ namespace Microsoft.PowerToys.Run.Plugin.Registry.Helper
     /// </summary>
     internal static class ResultHelper
     {
-        #pragma warning disable CA1031 // Do not catch general exception types
-
         /// <summary>
         /// Return a list with <see cref="Result"/>s, based on the given list
         /// </summary>
@@ -60,7 +58,7 @@ namespace Microsoft.PowerToys.Run.Plugin.Registry.Helper
 
                 result.Action = (_) => ContextMenuHelper.TryToOpenInRegistryEditor(entry);
                 result.ContextData = entry;
-                result.ToolTipData = new ToolTipData(Resources.RegistryKey, $"{Resources.KeyName}\t{result.Title}");
+                result.ToolTipData = new ToolTipData(Resources.RegistryKey, $"{Resources.KeyName} {result.Title}");
 
                 resultList.Add(result);
             }
@@ -82,7 +80,7 @@ namespace Microsoft.PowerToys.Run.Plugin.Registry.Helper
                 return new List<Result>(0);
             }
 
-            ICollection<KeyValuePair<string, object>> valueList = new List<KeyValuePair<string, object>>(key.ValueCount);
+            List<KeyValuePair<string, object>> valueList = new List<KeyValuePair<string, object>>(key.ValueCount);
 
             var resultList = new List<Result>();
 
@@ -94,7 +92,11 @@ namespace Microsoft.PowerToys.Run.Plugin.Registry.Helper
                 {
                     foreach (var valueName in valueNames)
                     {
-                        valueList.Add(KeyValuePair.Create(valueName, key.GetValue(valueName)));
+                        var value = key.GetValue(valueName);
+                        if (value != null)
+                        {
+                            valueList.Add(KeyValuePair.Create(valueName, value));
+                        }
                     }
                 }
                 catch (Exception valueException)
@@ -164,8 +166,6 @@ namespace Microsoft.PowerToys.Run.Plugin.Registry.Helper
             return resultList;
         }
 
-#pragma warning restore CA1031 // Do not catch general exception types
-
         /// <summary>
         /// Return a truncated name
         /// </summary>
@@ -198,10 +198,10 @@ namespace Microsoft.PowerToys.Run.Plugin.Registry.Helper
         /// <returns>A tool-tip text</returns>
         private static string GetToolTipTextForRegistryValue(RegistryKey key, KeyValuePair<string, object> valueEntry)
         {
-            return $"{Resources.KeyName}\t{key.Name}{Environment.NewLine}"
-                 + $"{Resources.Name}\t{valueEntry.Key}{Environment.NewLine}"
-                 + $"{Resources.Type}\t{ValueHelper.GetType(key, valueEntry.Key)}{Environment.NewLine}"
-                 + $"{Resources.Value}\t{ValueHelper.GetValue(key, valueEntry.Key)}";
+            return $"{Resources.KeyName} {key.Name}{Environment.NewLine}"
+                 + $"{Resources.Name} {valueEntry.Key}{Environment.NewLine}"
+                 + $"{Resources.Type} {ValueHelper.GetType(key, valueEntry.Key)}{Environment.NewLine}"
+                 + $"{Resources.Value} {ValueHelper.GetValue(key, valueEntry.Key)}";
         }
 
         /// <summary>

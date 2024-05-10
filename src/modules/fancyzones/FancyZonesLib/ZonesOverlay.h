@@ -9,9 +9,9 @@
 
 #include "util.h"
 #include "Zone.h"
-#include "ZoneSet.h"
 #include "FancyZones.h"
-#include "ZoneColors.h"
+#include "Colors.h"
+#include "LayoutConfigurator.h"
 
 class ZonesOverlay
 {
@@ -22,6 +22,7 @@ class ZonesOverlay
         D2D1_COLOR_F fillColor;
         D2D1_COLOR_F textColor;
         ZoneIndex id;
+        bool showText;
     };
 
     struct AnimationInfo
@@ -46,7 +47,6 @@ class ZonesOverlay
     std::vector<DrawableRect> m_sceneRects;
 
     float GetAnimationAlpha();
-    static ID2D1Factory* GetD2DFactory();
     static IDWriteFactory* GetWriteFactory();
     static D2D1_COLOR_F ConvertColor(COLORREF color);
     static D2D1_RECT_F ConvertRect(RECT rect);
@@ -65,7 +65,8 @@ public:
     void Hide();
     void Show();
     void Flash();
-    void DrawActiveZoneSet(const IZoneSet::ZonesMap& zones,
+    void DrawActiveZoneSet(const ZonesMap& zones,
                            const ZoneIndexSet& highlightZones,
-                           const ZoneColors& colors);
+                           const Colors::ZoneColors& colors,
+                           const bool showZoneText);
 };

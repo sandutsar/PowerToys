@@ -14,10 +14,12 @@
 #include <common/utils/timeutil.h>
 #include <common/utils/exec.h>
 
+#include "Package.h"
 #include "ReportMonitorInfo.h"
 #include "RegistryUtils.h"
 #include "EventViewer.h"
 #include "InstallationFolder.h"
+#include "ReportGPOValues.h"
 
 using namespace std;
 using namespace std::filesystem;
@@ -25,7 +27,20 @@ using namespace winrt::Windows::Data::Json;
 
 map<wstring, vector<wstring>> escapeInfo = {
     { L"FancyZones\\app-zone-history.json", { L"app-zone-history/app-path" } },
-    { L"FancyZones\\settings.json", { L"properties/fancyzones_excluded_apps" } }
+    { L"FancyZones\\settings.json", { L"properties/fancyzones_excluded_apps" } },
+    { L"MouseWithoutBorders\\settings.json", { L"properties/SecurityKey" } }, // avoid leaking connection key
+    { L"Keyboard Manager\\default.json", {
+        L"remapKeysToText",
+        L"remapShortcutsToText",
+        L"remapShortcuts/global/runProgramFilePath",
+        L"remapShortcuts/global/runProgramArgs",
+        L"remapShortcuts/global/runProgramStartInDir",
+        L"remapShortcuts/global/openUri",
+        L"remapShortcuts/appSpecific/runProgramFilePath",
+        L"remapShortcuts/appSpecific/runProgramArgs",
+        L"remapShortcuts/appSpecific/runProgramStartInDir",
+        L"remapShortcuts/appSpecific/openUri",
+        } }, // avoid leaking personal information from text, URI or application mappings
 };
 
 vector<wstring> filesToDelete = {
@@ -158,13 +173,13 @@ void ReportWindowsVersion(const filesystem::path& tmpDir)
 {
     auto versionReportPath = tmpDir;
     versionReportPath = versionReportPath.append("windows-version.txt");
-    OSVERSIONINFOEXW osInfo;
+    OSVERSIONINFOEXW osInfo{};
 
     try
     {
         NTSTATUS(WINAPI * RtlGetVersion)
         (LPOSVERSIONINFOEXW) = nullptr;
-        *(FARPROC*)&RtlGetVersion = GetProcAddress(GetModuleHandleA("ntdll"), "RtlGetVersion");
+        *reinterpret_cast<FARPROC*>(& RtlGetVersion) = GetProcAddress(GetModuleHandleA("ntdll"), "RtlGetVersion");
         if (RtlGetVersion)
         {
             osInfo.dwOSVersionInfoSize = sizeof(osInfo);
@@ -184,7 +199,7 @@ void ReportWindowsVersion(const filesystem::path& tmpDir)
         versionReport << "MinorVersion: " << osInfo.dwMinorVersion << endl;
         versionReport << "BuildNumber: " << osInfo.dwBuildNumber << endl;
     }
-    catch(...)
+    catch (...)
     {
         printf("Failed to write to %s\n", versionReportPath.string().c_str());
     }
@@ -197,7 +212,7 @@ void ReportWindowsSettings(const filesystem::path& tmpDir)
     try
     {
         const auto lang = winrt::Windows::System::UserProfile::GlobalizationPreferences::Languages().GetAt(0);
-        userLanguage = winrt::Windows::Globalization::Language{lang}.DisplayName().c_str();
+        userLanguage = winrt::Windows::Globalization::Language{ lang }.DisplayName().c_str();
         wchar_t localeName[LOCALE_NAME_MAX_LENGTH]{};
         if (!LCIDToLocaleName(GetThreadLocale(), localeName, LOCALE_NAME_MAX_LENGTH, 0))
         {
@@ -217,11 +232,10 @@ void ReportWindowsSettings(const filesystem::path& tmpDir)
         settingsReport << "Preferred user language: " << userLanguage << endl;
         settingsReport << "User locale: " << userLocale << endl;
     }
-    catch(...)
+    catch (...)
     {
         printf("Failed to write windows settings\n");
     }
-
 }
 
 void ReportDotNetInstallationInfo(const filesystem::path& tmpDir)
@@ -253,6 +267,28 @@ void ReportVCMLogs(const filesystem::path& tmpDir, const filesystem::path& repor
     copy(tmpDir / "PowerToysVideoConference_x64.log", reportDir, ec);
 }
 
+void ReportInstallerLogs(const filesystem::path& tmpDir, const filesystem::path& reportDir)
+{
+    const char* bootstrapperLogFilePrefix = "powertoys-bootstrapper-msi-";
+    const char* PTLogFilePrefix = "PowerToysMSIInstaller_";
+
+    for (auto& entry : directory_iterator{ tmpDir })
+    {
+        std::error_code ec;
+        if (entry.is_directory(ec) || !entry.path().has_filename())
+        {
+            continue;
+        }
+
+        const auto fileName = entry.path().filename().string();
+        if (!fileName.starts_with(bootstrapperLogFilePrefix) && !fileName.starts_with(PTLogFilePrefix))
+        {
+            continue;
+        }
+        copy(entry.path(), reportDir / fileName, ec);
+    }
+}
+
 int wmain(int argc, wchar_t* argv[], wchar_t*)
 {
     // Get path to save zip
@@ -276,27 +312,40 @@ int wmain(int argc, wchar_t* argv[], wchar_t*)
     }
 
     auto settingsRootPath = PTSettingsHelper::get_root_save_folder_location();
-    settingsRootPath = settingsRootPath + L"\\";
+    settingsRootPath += L"\\";
+
+    auto localLowPath = PTSettingsHelper::get_local_low_folder_location();
+    localLowPath += L"\\logs\\";
 
     const auto tempDir = temp_directory_path();
     auto reportDir = temp_directory_path() / "PowerToys\\";
     if (!DeleteFolder(reportDir))
     {
         printf("Failed to delete temp folder\n");
-        return 1;
     }
 
     try
     {
         copy(settingsRootPath, reportDir, copy_options::recursive);
-        
+
         // Remove updates folder contents
         DeleteFolder(reportDir / "Updates");
     }
+	
     catch (...)
     {
         printf("Failed to copy PowerToys folder\n");
         return 1;
+    }
+
+    try
+    {
+        copy(localLowPath, reportDir, copy_options::recursive);
+    }
+
+    catch (...)
+    {
+        printf("Failed to copy logs saved in LocalLow\n");
     }
 
 #ifndef _DEBUG
@@ -321,6 +370,9 @@ int wmain(int argc, wchar_t* argv[], wchar_t*)
     // Write registry to the temporary folder
     ReportRegistry(reportDir);
 
+    // Write gpo policies to the temporary folder
+    ReportGPOValues(reportDir);
+
     // Write compatibility tab info to the temporary folder
     ReportCompatibilityTab(reportDir);
 
@@ -328,6 +380,10 @@ int wmain(int argc, wchar_t* argv[], wchar_t*)
     EventViewer::ReportEventViewerInfo(reportDir);
 
     ReportVCMLogs(tempDir, reportDir);
+    
+    ReportInstallerLogs(tempDir, reportDir);
+
+    ReportInstalledContextMenuPackages(reportDir);
 
     // Zip folder
     auto zipPath = path::path(saveZipPath);

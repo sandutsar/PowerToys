@@ -8,10 +8,7 @@ using System.ComponentModel.Composition;
 using System.Windows.Input;
 using ColorPicker.Helpers;
 using ColorPicker.Settings;
-using ColorPicker.Telemetry;
-using Microsoft.PowerToys.Settings.UI.Library.Enumerations;
 using Microsoft.PowerToys.Settings.UI.Library.Utilities;
-using Microsoft.PowerToys.Telemetry;
 using static ColorPicker.NativeMethods;
 
 namespace ColorPicker.Keyboard
@@ -25,8 +22,9 @@ namespace ColorPicker.Keyboard
 
         private List<string> _activationKeys = new List<string>();
         private GlobalKeyboardHook _keyboardHook;
-        private bool disposedValue;
         private bool _activationShortcutPressed;
+        private int keyboardMoveSpeed;
+        private Key lastArrowKeyPressed = Key.None;
 
         [ImportingConstructor]
         public KeyboardMonitor(AppStateHandler appStateHandler, IUserSettings userSettings)
@@ -83,42 +81,101 @@ namespace ColorPicker.Keyboard
                 }
             }
 
-            if ((System.Windows.Application.Current as ColorPickerUI.App).IsRunningDetachedFromPowerToys())
+            if ((virtualCode == KeyInterop.VirtualKeyFromKey(Key.Space) || virtualCode == KeyInterop.VirtualKeyFromKey(Key.Enter)) && (e.KeyboardState == GlobalKeyboardHook.KeyboardState.KeyDown))
             {
-                var name = Helper.GetKeyName((uint)virtualCode);
+                e.Handled = _appStateHandler.HandleEnterPressed();
+                return;
+            }
 
-                // If the last key pressed is a modifier key, then currentlyPressedKeys cannot possibly match with _activationKeys
-                // because _activationKeys contains exactly 1 non-modifier key. Hence, there's no need to check if `name` is a
-                // modifier key or to do any additional processing on it.
-                if (e.KeyboardState == GlobalKeyboardHook.KeyboardState.KeyDown || e.KeyboardState == GlobalKeyboardHook.KeyboardState.SysKeyDown)
+            if (virtualCode == KeyInterop.VirtualKeyFromKey(Key.Back) && e.KeyboardState == GlobalKeyboardHook.KeyboardState.KeyDown)
+            {
+                e.Handled = _appStateHandler.HandleEscPressed();
+                return;
+            }
+
+            if (CheckMoveNeeded(virtualCode, Key.Up, e, 0, -1))
+            {
+                e.Handled = true;
+                return;
+            }
+            else if (CheckMoveNeeded(virtualCode, Key.Down, e, 0, 1))
+            {
+                e.Handled = true;
+                return;
+            }
+            else if (CheckMoveNeeded(virtualCode, Key.Left, e, -1, 0))
+            {
+                e.Handled = true;
+                return;
+            }
+            else if (CheckMoveNeeded(virtualCode, Key.Right, e, 1, 0))
+            {
+                e.Handled = true;
+                return;
+            }
+
+            var name = Helper.GetKeyName((uint)virtualCode);
+
+            // If the last key pressed is a modifier key, then currentlyPressedKeys cannot possibly match with _activationKeys
+            // because _activationKeys contains exactly 1 non-modifier key. Hence, there's no need to check if `name` is a
+            // modifier key or to do any additional processing on it.
+            if (e.KeyboardState == GlobalKeyboardHook.KeyboardState.KeyDown || e.KeyboardState == GlobalKeyboardHook.KeyboardState.SysKeyDown)
+            {
+                // Check pressed modifier keys.
+                AddModifierKeys(currentlyPressedKeys);
+
+                currentlyPressedKeys.Add(name);
+            }
+
+            currentlyPressedKeys.Sort();
+
+            if (currentlyPressedKeys.Count == 0 && _previouslyPressedKeys.Count != 0)
+            {
+                // no keys pressed, we can enable activation shortcut again
+                _activationShortcutPressed = false;
+            }
+
+            _previouslyPressedKeys = currentlyPressedKeys;
+
+            if (ArraysAreSame(currentlyPressedKeys, _activationKeys))
+            {
+                // avoid triggering this action multiple times as this will be called nonstop while keys are pressed
+                if (!_activationShortcutPressed)
                 {
-                    // Check pressed modifier keys.
-                    AddModifierKeys(currentlyPressedKeys);
+                    _activationShortcutPressed = true;
 
-                    currentlyPressedKeys.Add(name);
-                }
-
-                currentlyPressedKeys.Sort();
-
-                if (currentlyPressedKeys.Count == 0 && _previouslyPressedKeys.Count != 0)
-                {
-                    // no keys pressed, we can enable activation shortcut again
-                    _activationShortcutPressed = false;
-                }
-
-                _previouslyPressedKeys = currentlyPressedKeys;
-
-                if (ArraysAreSame(currentlyPressedKeys, _activationKeys))
-                {
-                    // avoid triggering this action multiple times as this will be called nonstop while keys are pressed
-                    if (!_activationShortcutPressed)
-                    {
-                        _activationShortcutPressed = true;
-
-                        _appStateHandler.StartUserSession();
-                    }
+                    _appStateHandler.StartUserSession();
                 }
             }
+        }
+
+        private bool CheckMoveNeeded(int virtualCode, Key key, GlobalKeyboardHookEventArgs e, int xMove, int yMove)
+        {
+            if (virtualCode == KeyInterop.VirtualKeyFromKey(key))
+            {
+                if (e.KeyboardState == GlobalKeyboardHook.KeyboardState.KeyDown && _appStateHandler.IsColorPickerVisible())
+                {
+                    if (lastArrowKeyPressed == key)
+                    {
+                        keyboardMoveSpeed++;
+                    }
+                    else
+                    {
+                        keyboardMoveSpeed = 1;
+                    }
+
+                    lastArrowKeyPressed = key;
+                    _appStateHandler.MoveCursor(keyboardMoveSpeed * xMove, keyboardMoveSpeed * yMove);
+                    return true;
+                }
+                else if (e.KeyboardState == GlobalKeyboardHook.KeyboardState.KeyUp)
+                {
+                    lastArrowKeyPressed = Key.None;
+                    keyboardMoveSpeed = 0;
+                }
+            }
+
+            return false;
         }
 
         private static bool ArraysAreSame(List<string> first, List<string> second)
@@ -164,18 +221,7 @@ namespace ColorPicker.Keyboard
 
         protected virtual void Dispose(bool disposing)
         {
-            if (!disposedValue)
-            {
-                if (disposing)
-                {
-                    // TODO: dispose managed state (managed objects)
-                    _keyboardHook.Dispose();
-                }
-
-                // TODO: free unmanaged resources (unmanaged objects) and override finalizer
-                // TODO: set large fields to null
-                disposedValue = true;
-            }
+            _keyboardHook?.Dispose();
         }
 
         public void Dispose()

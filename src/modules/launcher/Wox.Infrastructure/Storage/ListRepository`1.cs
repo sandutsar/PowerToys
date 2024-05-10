@@ -29,12 +29,12 @@ namespace Wox.Infrastructure.Storage
         {
         }
 
-        public void SetList(IList<T> items)
+        public void SetList(IList<T> list)
         {
             // enforce that internal representation
             try
             {
-                _items = new ConcurrentDictionary<int, T>(items.ToDictionary(i => i.GetHashCode()));
+                _items = new ConcurrentDictionary<int, T>(list.ToDictionary(i => i.GetHashCode()));
             }
             catch (ArgumentException e)
             {
@@ -44,7 +44,7 @@ namespace Wox.Infrastructure.Storage
 
         public bool Any()
         {
-            return _items.Any();
+            return !_items.IsEmpty;
         }
 
         public void Add(T insertedItem)

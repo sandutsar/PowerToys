@@ -6,7 +6,8 @@
 #include <string>
 #include <vector>
 
-#include <common/logger/call_tracer.h>
+#include <common/logger/logger.h>
+#include <common/utils/MsWindowsSettings.h>
 
 namespace
 {
@@ -40,16 +41,6 @@ float ZonesOverlay::GetAnimationAlpha()
     return std::clamp(millis / FadeInDurationMillis, 0.001f, 1.f);
 }
 
-ID2D1Factory* ZonesOverlay::GetD2DFactory()
-{
-    static auto pD2DFactory = [] {
-        ID2D1Factory* res = nullptr;
-        D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, &res);
-        return res;
-    }();
-    return pD2DFactory;
-}
-
 IDWriteFactory* ZonesOverlay::GetWriteFactory()
 {
     static auto pDWriteFactory = [] {
@@ -70,7 +61,7 @@ D2D1_COLOR_F ZonesOverlay::ConvertColor(COLORREF color)
 
 D2D1_RECT_F ZonesOverlay::ConvertRect(RECT rect)
 {
-    return D2D1::RectF((float)rect.left + 0.5f, (float)rect.top + 0.5f, (float)rect.right - 0.5f, (float)rect.bottom - 0.5f);
+    return D2D1::RectF(rect.left + 0.5f, rect.top + 0.5f, rect.right - 0.5f, rect.bottom - 0.5f);
 }
 
 ZonesOverlay::ZonesOverlay(HWND window)
@@ -83,7 +74,7 @@ ZonesOverlay::ZonesOverlay(HWND window)
     // Obtain the size of the drawing area.
     if (!GetClientRect(window, &m_clientRect))
     {
-        Logger::error("couldn't initialize ZonesOverlay: GetClientRect failed");
+        Logger::error(L"couldn't initialize ZonesOverlay: GetClientRect failed");
         return;
     }
 
@@ -98,11 +89,15 @@ ZonesOverlay::ZonesOverlay(HWND window)
     auto renderTargetSize = D2D1::SizeU(m_clientRect.right - m_clientRect.left, m_clientRect.bottom - m_clientRect.top);
     auto hwndRenderTargetProperties = D2D1::HwndRenderTargetProperties(window, renderTargetSize);
 
-    hr = GetD2DFactory()->CreateHwndRenderTarget(renderTargetProperties, hwndRenderTargetProperties, &m_renderTarget);
+    ID2D1Factory* factory = nullptr;
+    D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, &factory);
+    hr = factory->CreateHwndRenderTarget(renderTargetProperties, hwndRenderTargetProperties, &m_renderTarget);
+    factory->Release();
+    factory = nullptr;
 
     if (!SUCCEEDED(hr))
     {
-        Logger::error("couldn't initialize ZonesOverlay: CreateHwndRenderTarget failed with {}", hr);
+        Logger::error(L"couldn't initialize ZonesOverlay: CreateHwndRenderTarget failed with {}", hr);
         return;
     }
 
@@ -123,6 +118,12 @@ ZonesOverlay::RenderResult ZonesOverlay::Render()
     if (animationAlpha <= 0.f)
     {
         return RenderResult::AnimationEnded;
+    }
+
+    BOOL isEnabledAnimations = GetAnimationsEnabled();
+    if (!isEnabledAnimations)
+    {
+        animationAlpha = 1.f;
     }
 
     m_renderTarget->BeginDraw();
@@ -149,7 +150,6 @@ ZonesOverlay::RenderResult ZonesOverlay::Render()
         drawableRect.borderColor.a *= animationAlpha;
         drawableRect.fillColor.a *= animationAlpha;
 
-        m_renderTarget->CreateSolidColorBrush(drawableRect.textColor, &textBrush);
         m_renderTarget->CreateSolidColorBrush(drawableRect.borderColor, &borderBrush);
         m_renderTarget->CreateSolidColorBrush(drawableRect.fillColor, &fillBrush);
 
@@ -167,16 +167,21 @@ ZonesOverlay::RenderResult ZonesOverlay::Render()
 
         std::wstring idStr = std::to_wstring(drawableRect.id + 1);
 
-        if (textFormat && textBrush)
+        if (drawableRect.showText)
         {
-            textFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            textFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            m_renderTarget->DrawTextW(idStr.c_str(), (UINT32)idStr.size(), textFormat, drawableRect.rect, textBrush);
-        }
+            m_renderTarget->CreateSolidColorBrush(drawableRect.textColor, &textBrush);
 
-        if (textBrush)
-        {
-            textBrush->Release();
+            if (textFormat && textBrush)
+            {
+                textFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                textFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                m_renderTarget->DrawTextW(idStr.c_str(), static_cast<UINT32>(idStr.size()), textFormat, drawableRect.rect, textBrush);
+            }
+
+            if (textBrush)
+            {
+                textBrush->Release();
+            }
         }
     }
 
@@ -213,7 +218,6 @@ void ZonesOverlay::RenderLoop()
 
 void ZonesOverlay::Hide()
 {
-    _TRACER_;
     bool shouldHideWindow = true;
     {
         std::unique_lock lock(m_mutex);
@@ -230,7 +234,6 @@ void ZonesOverlay::Hide()
 
 void ZonesOverlay::Show()
 {
-    _TRACER_;
     bool shouldShowWindow = true;
     {
         std::unique_lock lock(m_mutex);
@@ -258,7 +261,6 @@ void ZonesOverlay::Show()
 
 void ZonesOverlay::Flash()
 {
-    _TRACER_;
     bool shouldShowWindow = true;
     {
         std::unique_lock lock(m_mutex);
@@ -276,11 +278,11 @@ void ZonesOverlay::Flash()
     m_cv.notify_all();
 }
 
-void ZonesOverlay::DrawActiveZoneSet(const IZoneSet::ZonesMap& zones,
+void ZonesOverlay::DrawActiveZoneSet(const ZonesMap& zones,
                                      const ZoneIndexSet& highlightZones,
-                                     const ZoneColors& colors)
+                                     const Colors::ZoneColors& colors,
+                                     const bool showZoneText)
 {
-    _TRACER_;
     std::unique_lock lock(m_mutex);
 
     m_sceneRects = {};
@@ -288,7 +290,7 @@ void ZonesOverlay::DrawActiveZoneSet(const IZoneSet::ZonesMap& zones,
     auto borderColor = ConvertColor(colors.borderColor);
     auto inactiveColor = ConvertColor(colors.primaryColor);
     auto highlightColor = ConvertColor(colors.highlightColor);
-    auto textColor = ConvertColor(colors.textColor);
+    auto numberColor = ConvertColor(colors.numberColor);
 
     inactiveColor.a = colors.highlightOpacity / 100.f;
     highlightColor.a = colors.highlightOpacity / 100.f;
@@ -302,19 +304,15 @@ void ZonesOverlay::DrawActiveZoneSet(const IZoneSet::ZonesMap& zones,
     // First draw the inactive zones
     for (const auto& [zoneId, zone] : zones)
     {
-        if (!zone)
-        {
-            continue;
-        }
-
         if (!isHighlighted[zoneId])
         {
             DrawableRect drawableRect{
-                .rect = ConvertRect(zone->GetZoneRect()),
+                .rect = ConvertRect(zone.GetZoneRect()),
                 .borderColor = borderColor,
                 .fillColor = inactiveColor,
-                .textColor = textColor,
-                .id = zone->Id()
+                .textColor = numberColor,
+                .id = zone.Id(),
+                .showText = showZoneText
             };
 
             m_sceneRects.push_back(drawableRect);
@@ -324,19 +322,15 @@ void ZonesOverlay::DrawActiveZoneSet(const IZoneSet::ZonesMap& zones,
     // Draw the active zones on top of the inactive zones
     for (const auto& [zoneId, zone] : zones)
     {
-        if (!zone)
-        {
-            continue;
-        }
-
         if (isHighlighted[zoneId])
         {
             DrawableRect drawableRect{
-                .rect = ConvertRect(zone->GetZoneRect()),
+                .rect = ConvertRect(zone.GetZoneRect()),
                 .borderColor = borderColor,
                 .fillColor = highlightColor,
-                .textColor = textColor,
-                .id = zone->Id()
+                .textColor = numberColor,
+                .id = zone.Id(),
+                .showText = showZoneText
             };
 
             m_sceneRects.push_back(drawableRect);
@@ -357,5 +351,6 @@ ZonesOverlay::~ZonesOverlay()
     if (m_renderTarget)
     {
         m_renderTarget->Release();
+        m_renderTarget = nullptr;
     }
 }

@@ -1,69 +1,189 @@
 # See https://github.com/check-spelling/check-spelling/wiki/Configuration-Examples:-patterns
-https?://(?:(?:www\.|)youtube\.com|youtu.be)/[-a-zA-Z0-9?&=]*
-# GitHub SHAs
-\bapi.github\.com/repos/[^/]+/[^/]+/[^/]+/[0-9a-f]+\b
-://github\.(?:com|blog)/[^\w")]+
-(?:\[[0-9a-f]+\]\(https:/|)/github\.com/[^/]+/[^/]+/[^/]+/[0-9a-f]+(?:[-0-9a-zA-Z/#.]*|)\b
+
+# Automatically suggested patterns
+# hit-count: 3011 file-count: 842
+# IServiceProvider / isAThing
+\b(?:I|isA)(?=(?:[A-Z][a-z]{2,})+\b)
+
+# hit-count: 2239 file-count: 134
+# hex runs
+\b[0-9a-fA-F]{16,}\b
+
+# hit-count: 1868 file-count: 1
+# sha-... -- uses a fancy capture
+(\\?['"]|&quot;)[0-9a-f]{40,}\g{-1}
+
+# hit-count: 1100 file-count: 97
+# base64 encoded content, possibly wrapped in mime
+(?:^|[\s=;:?])[-a-zA-Z=;:/0-9+]{50,}(?:[\s=;:?]|$)
+
+# hit-count: 426 file-count: 165
+# GitHub SHAs (markdown)
+(?:\[`?[0-9a-f]+`?\]\(https:/|)/(?:www\.|)github\.com(?:/[^/\s"]+){2,}(?:/[^/\s")]+)(?:[0-9a-f]+(?:[-0-9a-zA-Z/#.]*|)\b|)
+
+# hit-count: 331 file-count: 117
+# hex digits including css/html color classes:
+(?:[\\0][xX]|\\u|[uU]\+|#x?|\%23)[0-9_a-fA-FgGrR]*?[a-fA-FgGrR]{2,}[0-9_a-fA-FgGrR]*(?:[uUlL]{0,3}|[iu]\d+)\b
+
+# hit-count: 275 file-count: 45
+# version suffix <word>v#
+(?:(?<=[A-Z]{2})V|(?<=[a-z]{2}|[A-Z]{2})v)\d+(?:\b|(?=[a-zA-Z_]))
+
+# hit-count: 209 file-count: 97
+# w3
+\bw3\.org/[-0-9a-zA-Z/#.]+
+
+# hit-count: 137 file-count: 38
+# alternate markers if you run into latex and friends
+(?<!\\)\\[nrt](?=[a-z]{2,})(?=.*['"`](?:, "[^{]|\]))
+
+# tabs in c#
+\$"\\t
+
+# windows line breaks in strings
+\\r\\n
+
+# hit-count: 104 file-count: 43
+# regex choice
+\(\?:[^)]+\|[^)]+\)
+
+# hit-count: 76 file-count: 28
+# base64 encoded content
+([`'"])[-a-zA-Z=;:/0-9+]+=\g{-1}
+
+# hit-count: 70 file-count: 5
+# Contributor
+\[[^\]]+\]\(https://github\.com/[^/\s"]+/?\)
+
+# hit-count: 28 file-count: 22
+# stackexchange -- https://stackexchange.com/feeds/sites
+\b(?:askubuntu|serverfault|stack(?:exchange|overflow)|superuser).com/(?:questions/\w+/[-\w]+|a/)
+
+# hit-count: 21 file-count: 2
+# Update Lorem based on your content (requires `ge` and `w` from https://github.com/jsoref/spelling; and `review` from https://github.com/check-spelling/check-spelling/wiki/Looking-for-items-locally )
+# grep '^[^#].*lorem' .github/actions/spelling/patterns.txt|perl -pne 's/.*i..\?://;s/\).*//' |tr '|' "\n"|sort -f |xargs -n1 ge|perl -pne 's/^[^:]*://'|sort -u|w|sed -e 's/ .*//'|w|review -
+# Warning, while `(?i)` is very neat and fancy, if you have some binary files that aren't proper unicode, you might run into:
+## Operation "substitution (s///)" returns its argument for non-Unicode code point 0x1C19AE (the code point will vary).
+## You could manually change `(?i)X...` to use `[Xx]...`
+## or you could add the files to your `excludes` file (a version after 0.0.19 should identify the file path)
+# Lorem
+(?:\w|\s|[,.])*\b(?i)(?:amet|consectetur|cursus|dolor|eros|ipsum|lacus|libero|ligula|lorem|magna|neque|nulla|suscipit|tempus)\b(?:\w|\s|[,.])*
+
+# hit-count: 18 file-count: 15
+# microsoft
+\b(?:https?://|)(?:(?:download\.visualstudio|docs|msdn2?|research)\.microsoft|blogs\.msdn)\.com/[-_a-zA-Z0-9()=./%]*
+
+# hit-count: 14 file-count: 5
 # githubusercontent
-://githubusercontent\.com/[^\w")]+
-# gist github
-/gist\.github\.com/[^/]+/[0-9a-f]+
+/[-a-z0-9]+\.githubusercontent\.com/[-a-zA-Z0-9?&=_\/.]*
+
+# hit-count: 14 file-count: 3
+# node packages
+(["'])\@[^/'" ]+/[^/'" ]+\g{-1}
+
+# hit-count: 10 file-count: 4
+# URL escaped characters
+\%[0-9A-F][A-F]
+
+# hit-count: 9 file-count: 5
+# Wikipedia
+\ben\.wikipedia\.org/wiki/[-\w%.#]+
+
+# hit-count: 6 file-count: 3
+# css url wrappings
+\burl\([^)]+\)
+
+# hit-count: 5 file-count: 3
+# vs devops
+\bvisualstudio.com(?::443|)/[-\w/?=%&.]*
+
+# hit-count: 4 file-count: 3
+# Non-English
+[a-zA-Z]*[ÀÁÂÃÄÅÆČÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝßàáâãäåæčçèéêëìíîïðñòóôõöøùúûüýÿĀāŁłŃńŅņŒœŚśŠšŜŝŸŽžź][a-zA-Z]{3}[a-zA-ZÀÁÂÃÄÅÆČÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝßàáâãäåæčçèéêëìíîïðñòóôõöøùúûüýÿĀāŁłŃńŅņŒœŚśŠšŜŝŸŽžź]*|[a-zA-Z]{3,}[ÀÁÂÃÄÅÆČÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝßàáâãäåæčçèéêëìíîïðñòóôõöøùúûüýÿĀāŁłŃńŅņŒœŚśŠšŜŝŸŽžź]|[ÀÁÂÃÄÅÆČÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝßàáâãäåæčçèéêëìíîïðñòóôõöøùúûüýÿĀāŁłŃńŅņŒœŚśŠšŜŝŸŽžź][a-zA-Z]{3,}
+
+# hit-count: 4 file-count: 2
+# data url in quotes
+([`'"])data:(?:[^ `'"].*?|)(?:[A-Z]{3,}|[A-Z][a-z]{2,}|[a-z]{3,}).*\g{-1}
+
+# hit-count: 2 file-count: 2
+# mailto urls
+mailto:[-a-zA-Z=;:/?%&0-9+@.]{3,}
 
 # msdn
-\b(?:download\.visualstudio|docs|msdn)\.microsoft\.com/[-_a-zA-Z0-9()=./]*
+\b(?:download\.visualstudio|docs|msdn|learn)\.microsoft\.com/[-_a-zA-Z0-9()=./]*
+aka\.ms/[a-zA-Z0-9]+
 
-data:[a-zA-Z=;,/0-9+-]+
-0x[0-9a-fA-F](?:\.[0-9a-fA-F]*|)[pP]
-(?:0[Xx]|U\+|#)[a-f0-9A-FGgRr]{2,}[Uu]?[Ll]{0,2}\b
-# uuid:
-[-<({"'>][0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}[<'"})>]
+# hit-count: 2 file-count: 1
+# While you could try to match `http://` and `https://` by using `s?` in `https?://`, sometimes there
+# YouTube url
+\b(?:(?:www\.|)youtube\.com|youtu.be)/(?:channel/|embed/|user/|playlist\?list=|watch\?v=|v/|)[-a-zA-Z0-9?&=_%]*
 
-# ignore long runs of a single character:
-\b([A-Za-z])\g{-1}{3,}\b
+# power shell gallery website
+\bpowershellgallery.com/[-_a-zA-Z0-9()=./%]*
+
+# uuid: (or CompGUIDPrefix)
+L?(["']|[-<({>]|\b)[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{10,12}(?:\g{-1}|[<})>])
+
 (?:L"[abAB]+", ){3}L"[abAB]+"
-"Lorem[^"]+?\."
-TestCase\("[^"]+"
 
-# Test line with hexadecimal colors
-\[DataRow\("[0-9A-F]{6}", \d{3}, \d{3}, \d{3}\)\]
-\[DataRow\("[0-9A-F]{6}", \d{3}.\d{1}, \d{3}.\d{1}, \d{3}.\d{1}\)\]
-\[DataRow\("[0-9A-F]{6}", "[BCGMRY]\d\d?", \d{3}, \d{3}\)\]
-
-# Windows paths
-\\native
-\\netcoreapp
-\\netstandard
-\\notifications
-\\recyclebin
-\\reinstall
-\\Resize
-\\resource
-\\Resources
-\\restart
-\\restore
-\\result
-\\runner
-\\runtimes
-\\Telemetry
-\\telemetry
-\\testapp
-\\tests
-\\tools
-
-# plugin.json
-^  "ID": "[0-9A-F]{32}",$
+# hit-count: 1 file-count: 1
+# marker to ignore all code on line
+^.*/\* #no-spell-check-line \*/.*$
 
 # UnitTests
 \[DataRow\(.*\)\]
 
-# Id info inside markdown file (registry.md) 
-^\|\s+ID\s+\|\s*\`[0-9A-F]{32}\`
+# D2D
+D?2D
 
-# TestCase strings intentionally have non dictionary items
-\[TestCase\(new string.*\]
+# hit-count: 1 file-count: 1
+# GHSA
+GHSA(?:-[0-9a-z]{4}){3}
 
-# marker for ignoring a comment to the end of the line
-^.*/\* #no-spell-check-line \*/.*$
-// #no-spell-check.*$
+# hit-count: 1 file-count: 1
+# medium
+\bmedium\.com/\@?[^/\s"]+/[-\w]+
 
-http://tes/
+# hit-count: 1 file-count: 1
+# kubectl.kubernetes.io/last-applied-configuration
+"kubectl.kubernetes.io/last-applied-configuration": ".*"
+
+# hit-count: 1 file-count: 1
+# tar arguments
+\b(?:\\n|)g?tar(?:\.exe|)(?:(?:\s+--[-a-zA-Z]+|\s+-[a-zA-Z]+|\s[ABGJMOPRSUWZacdfh-pr-xz]+\b)(?:=[^ ]*|))+
+
+\bSecur32
+
+# Questionably acceptable forms of `in to`
+# Personally, I prefer `log into`, but people object
+# https://www.tprteaching.com/log-into-log-in-to-login/
+\b(?:[Ll]og|[Ss]ign) in to\b
+
+# to opt in
+\bto opt in\b
+
+# acceptable duplicates
+# ls directory listings
+[-bcdlpsw](?:[-r][-w][-Ssx]){3}\s+\d+\s+\S+\s+\S+\s+\d+\s+
+# mount
+\bmount\s+-t\s+(\w+)\s+\g{-1}\b
+# C types and repeated CSS values
+\s(auto|center|div|inherit|long|LONG|none|normal|solid|thin|transparent|very)(?: \g{-1})+\s
+# C struct
+\bstruct\s+(\w+)\s+\g{-1}\b
+# go templates
+\s(\w+)\s+\g{-1}\s+\`(?:graphql|inject|json|yaml):
+# doxygen / javadoc / .net
+(?:[\\@](?:brief|groupname|t?param|return|retval)|(?:public|private|\[Parameter(?:\(.+\)|)\])(?:\s+static|\s+override|\s+readonly)*)(?:\s+\{\w+\}|)\s+(\w+)\s+\g{-1}\s
+
+# Commit message -- Signed-off-by and friends
+^\s*(?:(?:Based-on-patch|Co-authored|Helped|Mentored|Reported|Reviewed|Signed-off)-by|Thanks-to): (?:[^<]*<[^>]*>|[^<]*)\s*$
+
+# Autogenerated revert commit message
+^This reverts commit [0-9a-f]{40}\.$
+
+# Compile flag added to Cpp.Build.props
+_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
+
+# ignore long runs of a single character:
+\b([A-Za-z])\g{-1}{3,}\b

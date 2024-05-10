@@ -15,13 +15,14 @@
 #include "EditKeyboardWindow.h"
 #include "SingleKeyRemapControl.h"
 #include "KeyDropDownControl.h"
-#include "XamlBridge.h"
+#include "XamlBridge2.h"
 #include "Styles.h"
 #include "Dialog.h"
 #include "LoadingAndSavingRemappingHelper.h"
 #include "UIHelpers.h"
 #include "ShortcutErrorType.h"
 #include "EditorConstants.h"
+#include <common/Themes/theme_listener.h>
 
 using namespace winrt::Windows::Foundation;
 
@@ -40,7 +41,21 @@ HWND hwndEditKeyboardNativeWindow = nullptr;
 std::mutex editKeyboardWindowMutex;
 
 // Stores a pointer to the Xaml Bridge object so that it can be accessed from the window procedure
-static XamlBridge* xamlBridgePtr = nullptr;
+static XamlBridge2* xamlBridgePtr = nullptr;
+
+// Theming
+static ThemeListener theme_listener{};
+
+static void handleTheme()
+{
+    auto theme = theme_listener.AppTheme;
+    auto isDark = theme == AppTheme::Dark;
+    Logger::info(L"Theme is now {}", isDark ? L"Dark" : L"Light");
+    if (hwndEditKeyboardNativeWindow != nullptr)
+    {
+        ThemeHelpers::SetImmersiveDarkMode(hwndEditKeyboardNativeWindow, isDark);
+    }
+}
 
 static IAsyncOperation<bool> OrphanKeysConfirmationDialog(
     KBMEditor::KeyboardManagerState& state,
@@ -122,15 +137,15 @@ inline void CreateEditKeyboardWindowImpl(HINSTANCE hInst, KBMEditor::KeyboardMan
         windowClass.lpfnWndProc = EditKeyboardWindowProc;
         windowClass.hInstance = hInst;
         windowClass.lpszClassName = szWindowClass;
-        windowClass.hbrBackground = (HBRUSH)(COLOR_WINDOW);
-        windowClass.hIcon = (HICON)LoadImageW(
+        windowClass.hbrBackground = CreateSolidBrush((ThemeHelpers::GetAppTheme() == AppTheme::Dark) ? 0x00000000 : 0x00FFFFFF);
+        windowClass.hIcon = static_cast<HICON>(LoadImageW(
             windowClass.hInstance,
             MAKEINTRESOURCE(IDS_KEYBOARDMANAGER_ICON),
             IMAGE_ICON,
             48,
             48,
-            LR_DEFAULTCOLOR);
-        
+            LR_DEFAULTCOLOR));
+
         if (RegisterClassEx(&windowClass) == NULL)
         {
             MessageBox(NULL, GET_RESOURCE_STRING(IDS_REGISTERCLASSFAILED_ERRORMESSAGE).c_str(), GET_RESOURCE_STRING(IDS_REGISTERCLASSFAILED_ERRORTITLE).c_str(), NULL);
@@ -144,26 +159,26 @@ inline void CreateEditKeyboardWindowImpl(HINSTANCE hInst, KBMEditor::KeyboardMan
     RECT desktopRect = UIHelpers::GetForegroundWindowDesktopRect();
 
     // Calculate DPI dependent window size
-    int windowWidth = EditorConstants::DefaultEditKeyboardWindowWidth;
-    int windowHeight = EditorConstants::DefaultEditKeyboardWindowHeight;
+    float windowWidth = EditorConstants::DefaultEditKeyboardWindowWidth;
+    float windowHeight = EditorConstants::DefaultEditKeyboardWindowHeight;
 
     DPIAware::ConvertByCursorPosition(windowWidth, windowHeight);
     DPIAware::GetScreenDPIForCursor(g_currentDPI);
-    
+
     // Window Creation
     HWND _hWndEditKeyboardWindow = CreateWindow(
         szWindowClass,
         GET_RESOURCE_STRING(IDS_EDITKEYBOARD_WINDOWNAME).c_str(),
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX,
-        ((desktopRect.right + desktopRect.left) / 2) - (windowWidth / 2),
-        ((desktopRect.bottom + desktopRect.top) / 2) - (windowHeight / 2),
-        windowWidth,
-        windowHeight,
+        ((desktopRect.right + desktopRect.left) / 2) - ((int)windowWidth / 2),
+        ((desktopRect.bottom + desktopRect.top) / 2) - ((int)windowHeight / 2),
+        static_cast<int>(windowWidth),
+        static_cast<int>(windowHeight),
         NULL,
         NULL,
         hInst,
         NULL);
-    
+
     if (_hWndEditKeyboardWindow == NULL)
     {
         MessageBox(NULL, GET_RESOURCE_STRING(IDS_CREATEWINDOWFAILED_ERRORMESSAGE).c_str(), GET_RESOURCE_STRING(IDS_CREATEWINDOWFAILED_ERRORTITLE).c_str(), NULL);
@@ -181,14 +196,19 @@ inline void CreateEditKeyboardWindowImpl(HINSTANCE hInst, KBMEditor::KeyboardMan
     hwndEditKeyboardNativeWindow = _hWndEditKeyboardWindow;
     hwndLock.unlock();
 
-    // Create the xaml bridge object
-    XamlBridge xamlBridge(_hWndEditKeyboardWindow);
+    // Hide icon and caption from title bar
+    const DWORD windowThemeOptionsMask = WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON;
+    WTA_OPTIONS windowThemeOptions{ windowThemeOptionsMask, windowThemeOptionsMask };
+    SetWindowThemeAttribute(_hWndEditKeyboardWindow, WTA_NONCLIENT, &windowThemeOptions, sizeof(windowThemeOptions));
 
-    // DesktopSource needs to be declared before the RelativePanel xamlContainer object to avoid errors
-    winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource desktopSource;
-    
+    handleTheme();
+    theme_listener.AddChangedHandler(handleTheme);
+
+    // Create the xaml bridge object
+    XamlBridge2 xamlBridge(_hWndEditKeyboardWindow);
+
     // Create the desktop window xaml source object and set its content
-    hWndXamlIslandEditKeyboardWindow = xamlBridge.InitDesktopWindowsXamlSource(desktopSource);
+    hWndXamlIslandEditKeyboardWindow = xamlBridge.InitBridge();
 
     // Set the pointer to the xaml bridge object
     xamlBridgePtr = &xamlBridge;
@@ -253,10 +273,10 @@ inline void CreateEditKeyboardWindowImpl(HINSTANCE hInst, KBMEditor::KeyboardMan
     SingleKeyRemapControl::keyboardManagerState = &keyboardManagerState;
     KeyDropDownControl::keyboardManagerState = &keyboardManagerState;
     KeyDropDownControl::mappingConfiguration = &mappingConfiguration;
-    
+
     // Clear the single key remap buffer
     SingleKeyRemapControl::singleKeyRemapBuffer.clear();
-    
+
     // Vector to store dynamically allocated control objects to avoid early destruction
     std::vector<std::vector<std::unique_ptr<SingleKeyRemapControl>>> keyboardRemapControlObjects;
 
@@ -265,10 +285,17 @@ inline void CreateEditKeyboardWindowImpl(HINSTANCE hInst, KBMEditor::KeyboardMan
 
     // Load existing remaps into UI
     SingleKeyRemapTable singleKeyRemapCopy = mappingConfiguration.singleKeyReMap;
+    SingleKeyToTextRemapTable singleKeyToTextRemapCopy = mappingConfiguration.singleKeyToTextReMap;
 
     LoadingAndSavingRemappingHelper::PreProcessRemapTable(singleKeyRemapCopy);
+    LoadingAndSavingRemappingHelper::PreProcessRemapTable(singleKeyToTextRemapCopy);
 
     for (const auto& it : singleKeyRemapCopy)
+    {
+        SingleKeyRemapControl::AddNewControlKeyRemapRow(keyRemapTable, keyboardRemapControlObjects, it.first, it.second);
+    }
+
+    for (const auto& it : singleKeyToTextRemapCopy)
     {
         SingleKeyRemapControl::AddNewControlKeyRemapRow(keyRemapTable, keyboardRemapControlObjects, it.first, it.second);
     }
@@ -304,28 +331,30 @@ inline void CreateEditKeyboardWindowImpl(HINSTANCE hInst, KBMEditor::KeyboardMan
 
     // Add remap key button
     Windows::UI::Xaml::Controls::Button addRemapKey;
-    FontIcon plusSymbol;
-    plusSymbol.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
-    plusSymbol.Glyph(L"\xE109");
-    addRemapKey.Content(plusSymbol);
     addRemapKey.Margin({ 10, 10, 0, 25 });
+    addRemapKey.Style(AccentButtonStyle());
     addRemapKey.Click([&](winrt::Windows::Foundation::IInspectable const& sender, RoutedEventArgs const&) {
         SingleKeyRemapControl::AddNewControlKeyRemapRow(keyRemapTable, keyboardRemapControlObjects);
 
         // Whenever a remap is added move to the bottom of the screen
         scrollViewer.ChangeView(nullptr, scrollViewer.ScrollableHeight(), nullptr);
 
-        // Set focus to the first Type Button in the newly added row
-        UIHelpers::SetFocusOnTypeButtonInLastRow(keyRemapTable, EditorConstants::RemapTableColCount);
+        // Set focus to the first "Select" Button in the newly added row
+        UIHelpers::SetFocusOnFirstSelectButtonInLastRowOfEditKeyboardWindow(keyRemapTable, EditorConstants::RemapTableColCount);
     });
+
+    // Remap key button content
+    StackPanel addRemapKeyContent;
+    addRemapKeyContent.Orientation(Orientation::Horizontal);
+    addRemapKeyContent.Spacing(10);
+    addRemapKeyContent.Children().Append(SymbolIcon(Symbol::Add));
+    TextBlock addRemapKeyText;
+    addRemapKeyText.Text(GET_RESOURCE_STRING(IDS_ADD_KEY_REMAP_BUTTON));
+    addRemapKeyContent.Children().Append(addRemapKeyText);
+    addRemapKey.Content(addRemapKeyContent);
 
     // Set accessible name for the addRemapKey button
     addRemapKey.SetValue(Automation::AutomationProperties::NameProperty(), box_value(GET_RESOURCE_STRING(IDS_ADD_KEY_REMAP_BUTTON)));
-
-    // Add tooltip for add button which would appear on hover
-    ToolTip addRemapKeytoolTip;
-    addRemapKeytoolTip.Content(box_value(GET_RESOURCE_STRING(IDS_ADD_KEY_REMAP_BUTTON)));
-    ToolTipService::SetToolTip(addRemapKey, addRemapKeytoolTip);
 
     // Header and example text at the top of the window
     StackPanel helperText;
@@ -363,7 +392,20 @@ inline void CreateEditKeyboardWindowImpl(HINSTANCE hInst, KBMEditor::KeyboardMan
     {
     }
 
-    desktopSource.Content(xamlContainer);
+    UserControl xamlContent;
+    xamlContent.Content(xamlContainer);
+    if (Windows::Foundation::Metadata::ApiInformation::IsTypePresent(L"Windows.UI.Composition.ICompositionSupportsSystemBackdrop"))
+    {
+        // Apply Mica
+        muxc::BackdropMaterial::SetApplyToRootOrPageBackground(xamlContent, true);
+    }
+    else
+    {
+        // Mica isn't available
+        xamlContainer.Background(Application::Current().Resources().Lookup(box_value(L"ApplicationPageBackgroundThemeBrush")).as<Media::SolidColorBrush>());
+    }
+    Window::Current().Content(xamlContent);
+
     ////End XAML Island section
     if (_hWndEditKeyboardWindow)
     {
@@ -378,12 +420,10 @@ inline void CreateEditKeyboardWindowImpl(HINSTANCE hInst, KBMEditor::KeyboardMan
     xamlBridgePtr = nullptr;
     hWndXamlIslandEditKeyboardWindow = nullptr;
     hwndLock.lock();
+    theme_listener.DelChangedHandler(handleTheme);
     hwndEditKeyboardNativeWindow = nullptr;
     keyboardManagerState.ResetUIState();
     keyboardManagerState.ClearRegisteredKeyDelays();
-
-    // Cannot be done in WM_DESTROY because that causes crashes due to fatal app exit
-    xamlBridge.ClearXamlIslands();
 }
 
 void CreateEditKeyboardWindow(HINSTANCE hInst, KBMEditor::KeyboardManagerState& keyboardManagerState, MappingConfiguration& mappingConfiguration)
@@ -414,12 +454,12 @@ LRESULT CALLBACK EditKeyboardWindowProc(HWND hWnd, UINT messageCode, WPARAM wPar
     // To avoid UI elements overlapping on making the window smaller enforce a minimum window size
     case WM_GETMINMAXINFO:
     {
-        LPMINMAXINFO mmi = (LPMINMAXINFO)lParam;
-        int minWidth = EditorConstants::MinimumEditKeyboardWindowWidth;
-        int minHeight = EditorConstants::MinimumEditKeyboardWindowHeight;
+        LPMINMAXINFO mmi = reinterpret_cast<LPMINMAXINFO>(lParam);
+        float minWidth = EditorConstants::MinimumEditKeyboardWindowWidth;
+        float minHeight = EditorConstants::MinimumEditKeyboardWindowHeight;
         DPIAware::Convert(MonitorFromWindow(hWnd, MONITOR_DEFAULTTONULL), minWidth, minHeight);
-        mmi->ptMinTrackSize.x = minWidth;
-        mmi->ptMinTrackSize.y = minHeight;
+        mmi->ptMinTrackSize.x = static_cast<LONG>(minWidth);
+        mmi->ptMinTrackSize.y = static_cast<LONG>(minHeight);
     }
     break;
     case WM_GETDPISCALEDSIZE:
@@ -450,8 +490,7 @@ LRESULT CALLBACK EditKeyboardWindowProc(HWND hWnd, UINT messageCode, WPARAM wPar
             rect->top,
             rect->right - rect->left,
             rect->bottom - rect->top,
-            SWP_NOZORDER | SWP_NOACTIVATE
-        );
+            SWP_NOZORDER | SWP_NOACTIVATE);
 
         Logger::trace(L"WM_DPICHANGED: new dpi {} rect {} {} ", newDPI, rect->right - rect->left, rect->bottom - rect->top);
     }
@@ -487,7 +526,7 @@ bool CheckEditKeyboardWindowActive()
         {
             ShowWindow(hwndEditKeyboardNativeWindow, SW_RESTORE);
         }
-        
+
         // If there is an already existing window no need to create a new open bring it on foreground.
         SetForegroundWindow(hwndEditKeyboardNativeWindow);
         result = true;

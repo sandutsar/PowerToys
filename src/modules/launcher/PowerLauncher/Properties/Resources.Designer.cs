@@ -19,7 +19,7 @@ namespace PowerLauncher.Properties {
     // class via a tool like ResGen or Visual Studio.
     // To add or remove a member, edit your .ResX file then rerun ResGen
     // with the /str option, or rebuild your VS project.
-    [global::System.CodeDom.Compiler.GeneratedCodeAttribute("System.Resources.Tools.StronglyTypedResourceBuilder", "16.0.0.0")]
+    [global::System.CodeDom.Compiler.GeneratedCodeAttribute("System.Resources.Tools.StronglyTypedResourceBuilder", "17.0.0.0")]
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
     [global::System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
     public class Resources {
@@ -97,6 +97,15 @@ namespace PowerLauncher.Properties {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Appended controls available.
+        /// </summary>
+        public static string ContextMenuItemsAvailable {
+            get {
+                return ResourceManager.GetString("ContextMenuItemsAvailable", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Context Menu Items Collection.
         /// </summary>
         public static string ContextMenuItemsCollection {
@@ -108,18 +117,18 @@ namespace PowerLauncher.Properties {
         /// <summary>
         ///   Looks up a localized string similar to Settings will be reset to default and program will continue to function..
         /// </summary>
-        public static string deseralization_error_message {
+        public static string deserialization_error_message {
             get {
-                return ResourceManager.GetString("deseralization_error_message", resourceCulture);
+                return ResourceManager.GetString("deserialization_error_message", resourceCulture);
             }
         }
         
         /// <summary>
         ///   Looks up a localized string similar to PowerToys Run deserialization error.
         /// </summary>
-        public static string deseralization_error_title {
+        public static string deserialization_error_title {
             get {
-                return ResourceManager.GetString("deseralization_error_title", resourceCulture);
+                return ResourceManager.GetString("deserialization_error_title", resourceCulture);
             }
         }
         
@@ -156,6 +165,15 @@ namespace PowerLauncher.Properties {
         public static string lastExecuteTime {
             get {
                 return ResourceManager.GetString("lastExecuteTime", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Plugin keywords.
+        /// </summary>
+        public static string PluginKeywords {
+            get {
+                return ResourceManager.GetString("PluginKeywords", resourceCulture);
             }
         }
         

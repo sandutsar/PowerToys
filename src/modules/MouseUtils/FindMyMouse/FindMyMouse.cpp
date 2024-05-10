@@ -2,8 +2,13 @@
 //
 #include "pch.h"
 #include "FindMyMouse.h"
+#include "WinHookEventIDs.h"
 #include "trace.h"
 #include "common/utils/game_mode.h"
+#include "common/utils/process_path.h"
+#include "common/utils/excluded_apps.h"
+#include "common/utils/MsWindowsSettings.h"
+#include <vector>
 
 #ifdef COMPOSITION
 namespace winrt
@@ -43,13 +48,15 @@ protected:
     void BeforeMoveSonar() {}
     void AfterMoveSonar() {}
     void SetSonarVisibility(bool visible) = delete;
+    void UpdateMouseSnooping();
+    bool IsForegroundAppExcluded();
 
 protected:
     // Base class members you can access.
     D* Shim() { return static_cast<D*>(this); }
     LRESULT BaseWndProc(UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
-    HWND m_hwnd;
+    HWND m_hwnd{};
     POINT m_sonarPos = ptNowhere;
 
     // Only consider double left control click if at least 100ms passed between the clicks, to avoid keyboards that might be sending rapid clicks.
@@ -57,22 +64,50 @@ protected:
     static const int MIN_DOUBLE_CLICK_TIME = 100;
 
     bool m_destroyed = false;
-    bool m_doNotActivateOnGameMode = true;
+    FindMyMouseActivationMethod m_activationMethod = FIND_MY_MOUSE_DEFAULT_ACTIVATION_METHOD;
+    bool m_doNotActivateOnGameMode = FIND_MY_MOUSE_DEFAULT_DO_NOT_ACTIVATE_ON_GAME_MODE;
     int m_sonarRadius = FIND_MY_MOUSE_DEFAULT_SPOTLIGHT_RADIUS;
     int m_sonarZoomFactor = FIND_MY_MOUSE_DEFAULT_SPOTLIGHT_INITIAL_ZOOM;
     DWORD m_fadeDuration = FIND_MY_MOUSE_DEFAULT_ANIMATION_DURATION_MS;
     int m_finalAlphaNumerator = FIND_MY_MOUSE_DEFAULT_OVERLAY_OPACITY;
+    std::vector<std::wstring> m_excludedApps;
+    int m_shakeMinimumDistance = FIND_MY_MOUSE_DEFAULT_SHAKE_MINIMUM_DISTANCE;
     static constexpr int FinalAlphaDenominator = 100;
     winrt::DispatcherQueueController m_dispatcherQueueController{ nullptr };
 
+    // Don't consider movements started past these milliseconds to detect shaking.
+    int m_shakeIntervalMs = FIND_MY_MOUSE_DEFAULT_SHAKE_INTERVAL_MS;
+    // By which factor must travelled distance be than the diagonal of the rectangle containing the movements. (value in percent)
+    int m_shakeFactor = FIND_MY_MOUSE_DEFAULT_SHAKE_FACTOR;
+
 private:
+
+    // Save the mouse movement that occurred in any direction.
+    struct PointerRecentMovement
+    {
+        POINT diff;
+        ULONGLONG tick;
+    };
+    std::vector<PointerRecentMovement> m_movementHistory;
+    // Raw Input may give relative or absolute values. Need to take each case into account.
+    bool m_seenAnAbsoluteMousePosition = false;
+    POINT m_lastAbsolutePosition = { 0, 0 };
+
+    static inline byte GetSign(LONG const& num)
+    {
+        if (num > 0)
+            return 1;
+        if (num < 0)
+            return -1;
+        return 0;
+    }
+
     static bool IsEqual(POINT const& p1, POINT const& p2)
     {
         return p1.x == p2.x && p1.y == p2.y;
     }
 
-    static constexpr POINT ptNowhere = { -1, -1 };
-
+    static constexpr POINT ptNowhere = { LONG_MIN, LONG_MIN };
     static constexpr DWORD TIMER_ID_TRACK = 100;
     static constexpr DWORD IdlePeriod = 1000;
 
@@ -86,14 +121,14 @@ private:
         ControlUp2,
     };
 
-    HWND m_hwndOwner;
+    HWND m_hwndOwner{};
     SonarState m_sonarState = SonarState::Idle;
     POINT m_lastKeyPos{};
-    DWORD m_lastKeyTime{};
+    ULONGLONG m_lastKeyTime{};
 
     static constexpr DWORD NoSonar = 0;
     static constexpr DWORD SonarWaitingForMouseMove = 1;
-    DWORD m_sonarStart = NoSonar;
+    ULONGLONG m_sonarStart = NoSonar;
     bool m_isSnoopingMouse = false;
 
 private:
@@ -110,10 +145,10 @@ private:
     void OnSonarMouseInput(RAWINPUT const& input);
     void OnMouseTimer();
 
+    void DetectShake();
+
     void StartSonar();
     void StopSonar();
-
-    void UpdateMouseSnooping();
 };
 
 template<typename D>
@@ -129,7 +164,7 @@ bool SuperSonar<D>::Initialize(HINSTANCE hinst)
         wc.hInstance = hinst;
         wc.hIcon = LoadIcon(hinst, IDI_APPLICATION);
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-        wc.hbrBackground = (HBRUSH)GetStockObject(NULL_BRUSH);
+        wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
         wc.lpszClassName = className;
 
         if (!RegisterClassW(&wc))
@@ -164,14 +199,14 @@ LRESULT SuperSonar<D>::s_WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
     SuperSonar* self;
     if (message == WM_NCCREATE)
     {
-        auto info = (LPCREATESTRUCT)lParam;
-        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)info->lpCreateParams);
-        self = (SuperSonar*)info->lpCreateParams;
+        auto info = reinterpret_cast<LPCREATESTRUCT>(lParam);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(info->lpCreateParams));
+        self = static_cast<SuperSonar*>(info->lpCreateParams);
         self->m_hwnd = hwnd;
     }
     else
     {
-        self = (SuperSonar*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        self = reinterpret_cast<SuperSonar*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
     }
     if (self)
     {
@@ -189,14 +224,16 @@ LRESULT SuperSonar<D>::BaseWndProc(UINT message, WPARAM wParam, LPARAM lParam) n
     switch (message)
     {
     case WM_CREATE:
-        return OnSonarCreate() ? 0 : -1;
+        if(!OnSonarCreate()) return -1;
+        UpdateMouseSnooping();
+        return 0;
 
     case WM_DESTROY:
         OnSonarDestroy();
         break;
 
     case WM_INPUT:
-        OnSonarInput(wParam, (HRAWINPUT)lParam);
+        OnSonarInput(wParam, reinterpret_cast<HRAWINPUT>(lParam));
         break;
 
     case WM_TIMER:
@@ -210,6 +247,18 @@ LRESULT SuperSonar<D>::BaseWndProc(UINT message, WPARAM wParam, LPARAM lParam) n
 
     case WM_NCHITTEST:
         return HTTRANSPARENT;
+    }
+
+    if (message == WM_PRIV_SHORTCUT)
+    {
+        if (m_sonarStart == NoSonar)
+        {
+            StartSonar();
+        }
+        else
+        {
+            StopSonar();
+        }
     }
 
     return DefWindowProc(m_hwnd, message, wParam, lParam);
@@ -238,7 +287,7 @@ void SuperSonar<D>::OnSonarInput(WPARAM flags, HRAWINPUT hInput)
     RAWINPUT input;
     UINT size = sizeof(input);
     auto result = GetRawInputData(hInput, RID_INPUT, &input, &size, sizeof(RAWINPUTHEADER));
-    if ((int)result < sizeof(RAWINPUTHEADER))
+    if (result < sizeof(RAWINPUTHEADER))
     {
         return;
     }
@@ -257,32 +306,27 @@ void SuperSonar<D>::OnSonarInput(WPARAM flags, HRAWINPUT hInput)
 template<typename D>
 void SuperSonar<D>::OnSonarKeyboardInput(RAWINPUT const& input)
 {
-    // Don't activate if game mode is on.
-    if (m_doNotActivateOnGameMode && detect_game_mode())
+    // Don't stop the sonar when the shortcut is released
+    if (m_activationMethod == FindMyMouseActivationMethod::Shortcut && (input.data.keyboard.Flags & RI_KEY_BREAK) != 0)
     {
         return;
     }
 
-    if (input.data.keyboard.VKey != VK_CONTROL)
+    if ((m_activationMethod != FindMyMouseActivationMethod::DoubleRightControlKey && m_activationMethod != FindMyMouseActivationMethod::DoubleLeftControlKey)
+        || input.data.keyboard.VKey != VK_CONTROL)
     {
         StopSonar();
         return;
     }
 
     bool pressed = (input.data.keyboard.Flags & RI_KEY_BREAK) == 0;
-    bool rightCtrl = (input.data.keyboard.Flags & RI_KEY_E0) != 0;
 
-    // Deal with rightCtrl first.
-    if (rightCtrl)
+    bool leftCtrlPressed = (input.data.keyboard.Flags & RI_KEY_E0) == 0;
+    bool rightCtrlPressed = (input.data.keyboard.Flags & RI_KEY_E0) != 0;
+
+    if ((m_activationMethod == FindMyMouseActivationMethod::DoubleRightControlKey && !rightCtrlPressed)
+        || (m_activationMethod == FindMyMouseActivationMethod::DoubleLeftControlKey && !leftCtrlPressed))
     {
-        /*
-        * SuperSonar originally exited when pressing right control after pressing left control twice.
-        * We take care of exiting FindMyMouse through module disabling in PowerToys settings instead.
-        if (m_sonarState == SonarState::ControlUp2)
-        {
-            Terminate();
-        }
-        */
         StopSonar();
         return;
     }
@@ -293,7 +337,7 @@ void SuperSonar<D>::OnSonarKeyboardInput(RAWINPUT const& input)
         if (pressed)
         {
             m_sonarState = SonarState::ControlDown1;
-            m_lastKeyTime = GetTickCount();
+            m_lastKeyTime = GetTickCount64();
             m_lastKeyPos = {};
             GetCursorPos(&m_lastKeyPos);
             UpdateMouseSnooping();
@@ -310,7 +354,7 @@ void SuperSonar<D>::OnSonarKeyboardInput(RAWINPUT const& input)
     case SonarState::ControlUp1:
         if (pressed)
         {
-            auto now = GetTickCount();
+            auto now = GetTickCount64();
             auto doubleClickInterval = now - m_lastKeyTime;
             POINT ptCursor{};
             auto doubleClickTimeSetting = GetDoubleClickTime();
@@ -325,7 +369,7 @@ void SuperSonar<D>::OnSonarKeyboardInput(RAWINPUT const& input)
             else
             {
                 m_sonarState = SonarState::ControlDown1;
-                m_lastKeyTime = GetTickCount();
+                m_lastKeyTime = GetTickCount64();
                 m_lastKeyPos = {};
                 GetCursorPos(&m_lastKeyPos);
                 UpdateMouseSnooping();
@@ -351,9 +395,97 @@ void SuperSonar<D>::OnSonarKeyboardInput(RAWINPUT const& input)
     }
 }
 
+// Shaking detection algorithm is: Has distance travelled been much greater than the diagonal of the rectangle containing the movement?
+template<typename D>
+void SuperSonar<D>::DetectShake()
+{
+    ULONGLONG shakeStartTick = GetTickCount64() - m_shakeIntervalMs;
+    
+    // Prune the story of movements for those movements that started too long ago.
+    std::erase_if(m_movementHistory, [shakeStartTick](const PointerRecentMovement& movement) { return movement.tick < shakeStartTick; });
+    
+    
+    double distanceTravelled = 0;
+    LONGLONG currentX=0, minX=0, maxX=0;
+    LONGLONG currentY=0, minY=0, maxY=0;
+
+    for (const PointerRecentMovement& movement : m_movementHistory)
+    {
+        currentX += movement.diff.x;
+        currentY += movement.diff.y;
+        distanceTravelled += sqrt(static_cast<double>(movement.diff.x) * movement.diff.x + static_cast<double>(movement.diff.y) * movement.diff.y); // Pythagorean theorem
+        minX = min(currentX, minX);
+        maxX = max(currentX, maxX);
+        minY = min(currentY, minY);
+        maxY = max(currentY, maxY);
+    }
+    
+    if (distanceTravelled < m_shakeMinimumDistance)
+    {
+        return;
+    }
+
+    // Size of the rectangle the pointer moved in.
+    double rectangleWidth =  static_cast<double>(maxX) - minX;
+    double rectangleHeight =  static_cast<double>(maxY) - minY;
+
+    double diagonal = sqrt(rectangleWidth * rectangleWidth + rectangleHeight * rectangleHeight);
+    if (diagonal > 0 && distanceTravelled / diagonal > (m_shakeFactor/100.f))
+    {
+        m_movementHistory.clear();
+        StartSonar();
+    }
+
+}
+
 template<typename D>
 void SuperSonar<D>::OnSonarMouseInput(RAWINPUT const& input)
 {
+    if (m_activationMethod == FindMyMouseActivationMethod::ShakeMouse)
+    {
+        LONG relativeX = 0;
+        LONG relativeY = 0;
+        if ((input.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == MOUSE_MOVE_ABSOLUTE && (input.data.mouse.lLastX!=0 || input.data.mouse.lLastY!=0))
+        {
+            // Getting absolute mouse coordinates. Likely inside a VM / RDP session.
+            if (m_seenAnAbsoluteMousePosition)
+            {
+                relativeX = input.data.mouse.lLastX - m_lastAbsolutePosition.x;
+                relativeY = input.data.mouse.lLastY - m_lastAbsolutePosition.y;
+                m_lastAbsolutePosition.x = input.data.mouse.lLastX;
+                m_lastAbsolutePosition.y = input.data.mouse.lLastY;
+            }
+            m_seenAnAbsoluteMousePosition = true;
+        }
+        else
+        {
+            relativeX = input.data.mouse.lLastX;
+            relativeY = input.data.mouse.lLastY;
+        }
+        if (m_movementHistory.size() > 0)
+        {
+            PointerRecentMovement& lastMovement = m_movementHistory.back();
+            // If the pointer is still moving in the same direction, just add to that movement instead of adding a new movement.
+            // This helps in keeping the list of movements smaller even in cases where a high number of messages is sent.
+            if (GetSign(lastMovement.diff.x) == GetSign(relativeX) && GetSign(lastMovement.diff.y) == GetSign(relativeY))
+            {
+                lastMovement.diff.x += relativeX;
+                lastMovement.diff.y += relativeY;
+            }
+            else
+            {
+                m_movementHistory.push_back({ .diff = { .x=relativeX, .y=relativeY }, .tick = GetTickCount64() });
+                // Mouse movement changed directions. Take the opportunity do detect shake.
+                DetectShake();
+            }
+        }
+        else
+        {
+            m_movementHistory.push_back({ .diff = { .x = relativeX, .y = relativeY }, .tick = GetTickCount64() });
+        }
+    
+    }
+
     if (input.data.mouse.usButtonFlags)
     {
         StopSonar();
@@ -367,10 +499,22 @@ void SuperSonar<D>::OnSonarMouseInput(RAWINPUT const& input)
 template<typename D>
 void SuperSonar<D>::StartSonar()
 {
+    // Don't activate if game mode is on.
+    if (m_doNotActivateOnGameMode && detect_game_mode())
+    {
+        return;
+    }
+
+    if (IsForegroundAppExcluded())
+    {
+        return;
+    }
+
     Logger::info("Focusing the sonar on the mouse cursor.");
     Trace::MousePointerFocused();
     // Cover the entire virtual screen.
-    SetWindowPos(m_hwnd, HWND_TOPMOST, GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN), 0);
+    // HACK: Draw with 1 pixel off. Otherwise Windows glitches the task bar transparency when a transparent window fill the whole screen.
+    SetWindowPos(m_hwnd, HWND_TOPMOST, GetSystemMetrics(SM_XVIRTUALSCREEN) + 1, GetSystemMetrics(SM_YVIRTUALSCREEN) + 1, GetSystemMetrics(SM_CXVIRTUALSCREEN) - 2, GetSystemMetrics(SM_CYVIRTUALSCREEN) - 2, 0);
     m_sonarPos = ptNowhere;
     OnMouseTimer();
     UpdateMouseSnooping();
@@ -393,7 +537,7 @@ void SuperSonar<D>::StopSonar()
 template<typename D>
 void SuperSonar<D>::OnMouseTimer()
 {
-    auto now = GetTickCount();
+    auto now = GetTickCount64();
 
     // If mouse has moved, then reset the sonar timer.
     POINT ptCursor{};
@@ -433,7 +577,7 @@ void SuperSonar<D>::OnMouseTimer()
 template<typename D>
 void SuperSonar<D>::UpdateMouseSnooping()
 {
-    bool wantSnoopingMouse = m_sonarStart != NoSonar || m_sonarState != SonarState::Idle;
+    bool wantSnoopingMouse = m_sonarStart != NoSonar || m_sonarState != SonarState::Idle || m_activationMethod == FindMyMouseActivationMethod::ShakeMouse;
     if (m_isSnoopingMouse != wantSnoopingMouse)
     {
         m_isSnoopingMouse = wantSnoopingMouse;
@@ -454,6 +598,26 @@ void SuperSonar<D>::UpdateMouseSnooping()
     }
 }
 
+template<typename D>
+bool SuperSonar<D>::IsForegroundAppExcluded()
+{
+    if (m_excludedApps.size() < 1)
+    {
+        return false;
+    }
+    if (HWND foregroundApp{ GetForegroundWindow() })
+    {
+        auto processPath = get_process_path(foregroundApp);
+        CharUpperBuffW(processPath.data(), static_cast<DWORD>(processPath.length()));
+
+        return check_excluded_app(foregroundApp, processPath, m_excludedApps);
+    }
+    else
+    {
+        return false;
+    }
+}
+
 struct CompositionSpotlight : SuperSonar<CompositionSpotlight>
 {
     static constexpr UINT WM_OPACITY_ANIMATION_COMPLETED = WM_APP;
@@ -466,7 +630,7 @@ struct CompositionSpotlight : SuperSonar<CompositionSpotlight>
 
     void AfterMoveSonar()
     {
-        m_spotlight.Offset({ (float)m_sonarPos.x, (float)m_sonarPos.y, 0.0f });
+        m_spotlight.Offset({ static_cast<float>(m_sonarPos.x), static_cast<float>(m_sonarPos.y), 0.0f });
     }
 
     LRESULT WndProc(UINT message, WPARAM wParam, LPARAM lParam) noexcept
@@ -486,6 +650,8 @@ struct CompositionSpotlight : SuperSonar<CompositionSpotlight>
     void SetSonarVisibility(bool visible)
     {
         m_batch = m_compositor.GetCommitBatch(winrt::CompositionBatchTypes::Animation);
+        BOOL isEnabledAnimations = GetAnimationsEnabled();
+        m_animation.Duration(std::chrono::milliseconds{ isEnabledAnimations ? m_fadeDuration : 1 });
         m_batch.Completed([hwnd = m_hwnd](auto&&, auto&&) {
             PostMessage(hwnd, WM_OPACITY_ANIMATION_COMPLETED, 0, 0);
         });
@@ -494,6 +660,11 @@ struct CompositionSpotlight : SuperSonar<CompositionSpotlight>
         {
             ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
         }
+    }
+
+    HWND GetHwnd() noexcept
+    {
+        return m_hwnd;
     }
 
 private:
@@ -590,14 +761,25 @@ public:
             m_sonarRadiusFloat = static_cast<float>(m_sonarRadius);
             m_backgroundColor = settings.backgroundColor;
             m_spotlightColor = settings.spotlightColor;
+            m_activationMethod = settings.activationMethod;
             m_doNotActivateOnGameMode = settings.doNotActivateOnGameMode;
             m_fadeDuration = settings.animationDurationMs > 0 ? settings.animationDurationMs : 1;
             m_finalAlphaNumerator = settings.overlayOpacity;
             m_sonarZoomFactor = settings.spotlightInitialZoom;
+            m_excludedApps = settings.excludedApps;
+            m_shakeMinimumDistance = settings.shakeMinimumDistance;
+            m_shakeIntervalMs = settings.shakeIntervalMs;
+            m_shakeFactor = settings.shakeFactor;
         }
         else
         {
             // Runtime objects already created. Should update in the owner thread.
+            if (m_dispatcherQueueController == nullptr)
+            {
+                Logger::warn("Tried accessing the dispatch queue controller before it was initialized.");
+                // No dispatcher Queue Controller? Means initialization still hasn't run, so settings will be applied then.
+                return;
+            }
             auto dispatcherQueue = m_dispatcherQueueController.DispatcherQueue();
             FindMyMouseSettings localSettings = settings;
             bool enqueueSucceeded = dispatcherQueue.TryEnqueue([=]() {
@@ -608,11 +790,17 @@ public:
                     m_sonarRadiusFloat = static_cast<float>(m_sonarRadius);
                     m_backgroundColor = localSettings.backgroundColor;
                     m_spotlightColor = localSettings.spotlightColor;
+                    m_activationMethod = localSettings.activationMethod;
                     m_doNotActivateOnGameMode = localSettings.doNotActivateOnGameMode;
                     m_fadeDuration = localSettings.animationDurationMs > 0 ? localSettings.animationDurationMs : 1;
                     m_finalAlphaNumerator = localSettings.overlayOpacity;
                     m_sonarZoomFactor = localSettings.spotlightInitialZoom;
-        
+                    m_excludedApps = localSettings.excludedApps;
+                    m_shakeMinimumDistance = localSettings.shakeMinimumDistance;
+                    m_shakeIntervalMs = localSettings.shakeIntervalMs;
+                    m_shakeFactor = localSettings.shakeFactor;
+                    UpdateMouseSnooping(); // For the shake mouse activation method
+
                     // Apply new settings to runtime composition objects.
                     m_backdrop.Brush().as<winrt::CompositionColorBrush>().Color(m_backgroundColor);
                     m_circleShape.FillBrush().as<winrt::CompositionColorBrush>().Color(m_spotlightColor);
@@ -764,10 +952,10 @@ struct GdiSpotlight : GdiSonar<GdiSpotlight>
         auto spotlight = CreateRoundRectRgn(
             this->m_sonarPos.x - radius, this->m_sonarPos.y - radius, this->m_sonarPos.x + radius, this->m_sonarPos.y + radius, radius * 2, radius * 2);
 
-        FillRgn(ps.hdc, spotlight, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        FillRgn(ps.hdc, spotlight, static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
         Sleep(1000 / 60);
         ExtSelectClipRgn(ps.hdc, spotlight, RGN_DIFF);
-        FillRect(ps.hdc, &ps.rcPaint, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        FillRect(ps.hdc, &ps.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         DeleteObject(spotlight);
 
         EndPaint(this->m_hwnd, &ps);
@@ -799,7 +987,7 @@ struct GdiCrosshairs : GdiSonar<GdiCrosshairs>
         auto radius = CurrentSonarRadius();
         RECT rc;
 
-        HBRUSH white = (HBRUSH)GetStockObject(WHITE_BRUSH);
+        HBRUSH white = static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
 
         rc.left = m_sonarPos.x - radius;
         rc.top = ps.rcPaint.top;
@@ -813,7 +1001,7 @@ struct GdiCrosshairs : GdiSonar<GdiCrosshairs>
         rc.bottom = m_sonarPos.y + radius;
         FillRect(ps.hdc, &rc, white);
 
-        HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        HBRUSH black = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
 
         // Top left
         rc.left = ps.rcPaint.left;
@@ -896,6 +1084,8 @@ int FindMyMouseMain(HINSTANCE hinst, const FindMyMouseSettings& settings)
     m_sonar = &sonar;
     Logger::info("Initialized the sonar instance.");
 
+    InitializeWinhookEventIds();
+
     MSG msg;
 
     // Main message loop:
@@ -909,6 +1099,16 @@ int FindMyMouseMain(HINSTANCE hinst, const FindMyMouseSettings& settings)
     m_sonar = nullptr;
 
     return (int)msg.wParam;
+}
+
+HWND GetSonarHwnd() noexcept
+{
+    if (m_sonar != nullptr)
+    {
+        return m_sonar->GetHwnd();
+    }
+
+    return nullptr;
 }
 
 #pragma endregion Super_Sonar_API

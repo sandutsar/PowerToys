@@ -10,6 +10,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO.Abstractions;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -21,6 +22,13 @@ namespace ImageResizer.Properties
     public sealed partial class Settings : IDataErrorInfo, INotifyPropertyChanged
     {
         private static readonly IFileSystem _fileSystem = new FileSystem();
+        private static readonly JsonSerializerOptions _jsonSerializerOptions = new JsonSerializerOptions
+        {
+            NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+            WriteIndented = true,
+        };
+
+        private static readonly CompositeFormat ValueMustBeBetween = System.Text.CompositeFormat.Parse(Properties.Resources.ValueMustBeBetween);
 
         // Used to synchronize access to the settings.json file
         private static Mutex _jsonMutex = new Mutex();
@@ -117,7 +125,7 @@ namespace ImageResizer.Properties
                 if (JpegQualityLevel < 1 || JpegQualityLevel > 100)
                 {
                     // Using CurrentCulture since this is user facing
-                    return string.Format(CultureInfo.CurrentCulture, Resources.ValueMustBeBetween, 1, 100);
+                    return string.Format(CultureInfo.CurrentCulture, ValueMustBeBetween, 1, 100);
                 }
 
                 return string.Empty;
@@ -409,7 +417,7 @@ namespace ImageResizer.Properties
         public void Save()
         {
             _jsonMutex.WaitOne();
-            string jsonData = JsonSerializer.Serialize(new SettingsWrapper() { Properties = this });
+            string jsonData = JsonSerializer.Serialize(new SettingsWrapper() { Properties = this }, _jsonSerializerOptions);
 
             // Create directory if it doesn't exist
             IFileInfo file = _fileSystem.FileInfo.FromFileName(SettingsPath);
@@ -442,7 +450,7 @@ namespace ImageResizer.Properties
             var jsonSettings = new Settings();
             try
             {
-                jsonSettings = JsonSerializer.Deserialize<SettingsWrapper>(jsonData)?.Properties;
+                jsonSettings = JsonSerializer.Deserialize<SettingsWrapper>(jsonData, _jsonSerializerOptions)?.Properties;
             }
             catch (JsonException)
             {

@@ -5,10 +5,12 @@
 using System;
 using System.ComponentModel.Composition;
 using System.Windows;
+using System.Windows.Interop;
 using ColorPicker.Settings;
 using ColorPicker.ViewModelContracts;
-using Microsoft.PowerToys.Common.UI;
+using Common.UI;
 using Microsoft.PowerToys.Settings.UI.Library.Enumerations;
+using static ColorPicker.Helpers.NativeMethodsHelper;
 
 namespace ColorPicker.Helpers
 {
@@ -20,6 +22,9 @@ namespace ColorPicker.Helpers
         private ColorEditorWindow _colorEditorWindow;
         private bool _colorPickerShown;
         private object _colorPickerVisibilityLock = new object();
+
+        private HwndSource _hwndSource;
+        private const int _globalHotKeyId = 0x0001;
 
         // Blocks using the escape key to close the color picker editor when the adjust color flyout is open.
         public static bool BlockEscapeKeyClosingColorPickerEditor { get; set; }
@@ -37,6 +42,12 @@ namespace ColorPicker.Helpers
         public event EventHandler AppHidden;
 
         public event EventHandler AppClosed;
+
+        public event EventHandler EnterPressed;
+
+        public event EventHandler UserSessionStarted;
+
+        public event EventHandler UserSessionEnded;
 
         public void StartUserSession()
         {
@@ -56,6 +67,11 @@ namespace ColorPicker.Helpers
                 {
                     ShowColorPicker();
                 }
+
+                if (!(System.Windows.Application.Current as ColorPickerUI.App).IsRunningDetachedFromPowerToys())
+                {
+                    UserSessionStarted?.Invoke(this, EventArgs.Empty);
+                }
             }
         }
 
@@ -72,6 +88,11 @@ namespace ColorPicker.Helpers
                     else
                     {
                         HideColorPicker();
+                    }
+
+                    if (!(System.Windows.Application.Current as ColorPickerUI.App).IsRunningDetachedFromPowerToys())
+                    {
+                        UserSessionEnded?.Invoke(this, EventArgs.Empty);
                     }
 
                     SessionEventHelper.End();
@@ -133,7 +154,7 @@ namespace ColorPicker.Helpers
             if (_colorEditorWindow == null)
             {
                 _colorEditorWindow = new ColorEditorWindow(this);
-                _colorEditorWindow.Content = _colorEditorViewModel;
+                _colorEditorWindow.contentPresenter.Content = _colorEditorViewModel;
                 _colorEditorViewModel.OpenColorPickerRequested += ColorEditorViewModel_OpenColorPickerRequested;
                 _colorEditorViewModel.OpenSettingsRequested += ColorEditorViewModel_OpenSettingsRequested;
                 _colorEditorViewModel.OpenColorPickerRequested += (object sender, EventArgs e) =>
@@ -188,7 +209,44 @@ namespace ColorPicker.Helpers
 
         private void ColorEditorViewModel_OpenSettingsRequested(object sender, EventArgs e)
         {
-            SettingsDeepLink.OpenSettings(SettingsDeepLink.SettingsWindow.ColorPicker);
+            SettingsDeepLink.OpenSettings(SettingsDeepLink.SettingsWindow.ColorPicker, false);
+        }
+
+        internal void RegisterWindowHandle(System.Windows.Interop.HwndSource hwndSource)
+        {
+            _hwndSource = hwndSource;
+        }
+
+        public bool HandleEnterPressed()
+        {
+            if (!IsColorPickerVisible())
+            {
+                return false;
+            }
+
+            EnterPressed?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        public bool HandleEscPressed()
+        {
+            if (!BlockEscapeKeyClosingColorPickerEditor)
+            {
+                return EndUserSession();
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        internal void MoveCursor(int xOffset, int yOffset)
+        {
+            POINT lpPoint;
+            GetCursorPos(out lpPoint);
+            lpPoint.X += xOffset;
+            lpPoint.Y += yOffset;
+            SetCursorPos(lpPoint.X, lpPoint.Y);
         }
     }
 }
